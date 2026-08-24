@@ -1,7 +1,7 @@
 {
   "name": "@meri-imperiumi/signalk-consumption-estimator",
   "version": "0.1.0",
-  "description": "Signal K plugin estimating tank consumption per crew count with incremental learning",
+  "description": "Signal K plugin estimating freshwater consumption per crew count with incremental learning",
   "main": "plugin/index.js",
   "scripts": {
     "format": "npx @biomejs/biome check --use-editorconfig=true --write plugin/ tests/",
