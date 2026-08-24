@@ -1,0 +1,10 @@
+node_modules/
+*.log
+npm-debug.log*
+.DS_Store
+.env
+.vscode/
+.idea/
+coverage/
+.nyc_output/
+*.tgz

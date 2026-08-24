@@ -1,0 +1,38 @@
+{
+  "name": "@meri-imperiumi/signalk-consumption-estimator",
+  "version": "0.1.0",
+  "description": "Signal K plugin estimating tank consumption per crew count with incremental learning",
+  "main": "plugin/index.js",
+  "scripts": {
+    "format": "npx @biomejs/biome check --use-editorconfig=true --write plugin/ tests/",
+    "lint": "npx @biomejs/biome check --use-editorconfig=true plugin/",
+    "test": "node --test --test-force-exit \"tests/*.test.js\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/meri-imperiumi/signalk-consumption-estimator.git"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-utility"
+  ],
+  "author": "Henri Bergius <henri.bergius@iki.fi>",
+  "license": "EUPL-1.2",
+  "bugs": {
+    "url": "https://github.com/meri-imperiumi/signalk-consumption-estimator/issues"
+  },
+  "signalk-plugin-enabled-by-default": false,
+  "signalk": {
+    "displayName": "Consumption Estimator",
+    "requires": [],
+    "recommends": [
+      "@meri-imperiumi/signalk-logbook"
+    ]
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "@signalk/server-api": "^2.30.0"
+  }
+}
