@@ -87,7 +87,7 @@ class TankEstimator {
       typeof opts.defaultPerCrewLitersPerDay === "number" &&
       opts.defaultPerCrewLitersPerDay >= 0
         ? opts.defaultPerCrewLitersPerDay
-        : 30;
+        : 6;
     this.defaultCrewCount =
       typeof opts.defaultCrewCount === "number" && opts.defaultCrewCount >= 0
         ? Math.round(opts.defaultCrewCount)

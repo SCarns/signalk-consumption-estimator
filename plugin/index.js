@@ -37,7 +37,7 @@ const DEFAULT_TANK = {
   remainingPath: "tanks.freshWater.water.remaining",
   predictionBase: "tanks.freshWater.water.prediction",
   capacity: null,
-  defaultPerCrewLitersPerDay: 30,
+  defaultPerCrewLitersPerDay: 6,
   defaultCrewCount: 2,
 };
 
@@ -382,7 +382,7 @@ function buildPluginSchema() {
               title: "Default Consumption Per Crew",
               description:
                 "Liters per day per crew member used until enough has been learned",
-              default: 30,
+              default: 6,
               minimum: 0,
             },
             defaultCrewCount: {
@@ -884,8 +884,16 @@ module.exports = (app) => {
               ? tank.predictionBase
               : predictionBaseFromLevelPath(tank.levelPath),
           capacity: tank.capacity ?? null,
-          defaultPerCrewLitersPerDay: tank.defaultPerCrewLitersPerDay,
-          defaultCrewCount: tank.defaultCrewCount,
+          defaultPerCrewLitersPerDay:
+            typeof tank.defaultPerCrewLitersPerDay === "number" &&
+            tank.defaultPerCrewLitersPerDay >= 0
+              ? tank.defaultPerCrewLitersPerDay
+              : DEFAULT_CONFIG.tanks[0].defaultPerCrewLitersPerDay,
+          defaultCrewCount:
+            typeof tank.defaultCrewCount === "number" &&
+            tank.defaultCrewCount >= 0
+              ? tank.defaultCrewCount
+              : DEFAULT_CONFIG.tanks[0].defaultCrewCount,
           emaAlpha: config.learning.emaAlpha,
           minSamples: config.learning.minSamples,
         }),

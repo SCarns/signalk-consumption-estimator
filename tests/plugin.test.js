@@ -313,7 +313,7 @@ test.describe("Plugin lifecycle", () => {
     const base = "tanks.freshWater.water.prediction";
     // Volume-dependent predictions stay null, but the rate (default fallback
     // for the default 2 crew) is still published
-    assert.strictEqual(lastValue(app, `${base}.consumption24h`), 60);
+    assert.strictEqual(lastValue(app, `${base}.consumption24h`), 12);
     assert.strictEqual(lastValue(app, `${base}.remaining24h`), null);
     assert.strictEqual(lastValue(app, `${base}.level24h`), null);
     const status = app.setPluginStatusCalls.at(-1);
@@ -335,7 +335,7 @@ test.describe("Plugin lifecycle", () => {
     internals.runCycle();
 
     const base = "tanks.freshWater.water.prediction";
-    assert.strictEqual(lastValue(app, `${base}.consumption24h`), 60);
+    assert.strictEqual(lastValue(app, `${base}.consumption24h`), 12);
     assert.strictEqual(lastValue(app, `${base}.remaining24h`), null);
     assert.strictEqual(lastValue(app, `${base}.level24h`), null);
     const status = app.setPluginStatusCalls.at(-1);
@@ -366,7 +366,7 @@ test.describe("Plugin lifecycle", () => {
     // One learning sample so far: bin exists but below minSamples (3),
     // so the rate is still the default and the status shows warming up
     const base = "tanks.freshWater.water.prediction";
-    assert.strictEqual(lastValue(app, `${base}.consumption24h`), 60);
+    assert.strictEqual(lastValue(app, `${base}.consumption24h`), 12);
     const status = app.setPluginStatusCalls.at(-1);
     assert.ok(status.includes("crew 2 warming up (1/3)"));
 

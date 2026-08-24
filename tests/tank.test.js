@@ -340,15 +340,15 @@ test.describe("TankEstimator predict", () => {
     assert.strictEqual(pred.level24h, null);
     assert.strictEqual(pred.timeToEmptyDays, null);
     // Rate still resolves (default fallback) for consumers of the rate alone
-    assert.strictEqual(pred.rate, 60);
+    assert.strictEqual(pred.rate, 12);
   });
 
   test("estimates liters from level when remaining is absent", () => {
     const est = makeEstimator({ capacity: 200, minSamples: 0.1 });
     const pred = est.predict({ remaining: null, level: 0.5, crewCount: 2 });
     assert.strictEqual(pred.liters, 100);
-    assert.strictEqual(pred.remaining24h, Math.max(0, 100 - 60));
-    assert.strictEqual(pred.level24h, Math.max(0, (100 - 60) / 200));
+    assert.strictEqual(pred.remaining24h, Math.max(0, 100 - 12));
+    assert.strictEqual(pred.level24h, Math.max(0, (100 - 12) / 200));
   });
 });
 
