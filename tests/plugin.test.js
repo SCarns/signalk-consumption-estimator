@@ -528,6 +528,82 @@ test.describe("Plugin lifecycle", () => {
     assert.strictEqual(plugin.__getInternals().unsubscribes.length, 0);
   });
 
+  test("subscribes to navigation.state for learning control", async () => {
+    const app = new FakeSignalKApp();
+    app.dataPath = await newDataDir();
+    const plugin = makePlugin(app);
+    await plugin.start(TEST_CONFIG);
+
+    const paths =
+      app.subscriptionmanager.subscriptions[0].subscription.subscribe.map(
+        (s) => s.path,
+      );
+    assert.ok(paths.includes("navigation.state"));
+
+    await plugin.stop();
+  });
+
+  test("skips learning when boat is under way", async () => {
+    const app = new FakeSignalKApp();
+    app.dataPath = await newDataDir();
+    const plugin = makePlugin(app);
+    await plugin.start(TEST_CONFIG);
+    const internals = plugin.__getInternals();
+
+    // First learning cycle (stationary)
+    let t = T0;
+    emitSample(app, t, { remaining: 200, level: 0.8, crew: ["a", "b"] });
+    internals.runCycle();
+    t += 24 * HOUR;
+    emitSample(app, t, { remaining: 176, level: 0.704, crew: ["a", "b"] });
+    internals.runCycle();
+
+    const est = internals.estimators[0];
+    // Learned 24 l/day for 2 crew
+    assert.strictEqual(est.learner.getRate(2), 24);
+
+    // Now set boat to "sailing" state
+    app.pathValues.set("navigation.state", "sailing");
+    app.subscriptionmanager.emitDelta({
+      updates: [
+        {
+          values: [{ path: "navigation.state", value: "sailing" }],
+          timestamp: new Date(t).toISOString(),
+        },
+      ],
+    });
+
+    // Emit a sample while sailing - should not learn
+    t += 24 * HOUR;
+    emitSample(app, t, { remaining: 152, level: 0.608, crew: ["a", "b"] });
+    internals.runCycle();
+
+    // Rate should still be 24 (unchanged because learning was skipped)
+    assert.strictEqual(est.learner.getRate(2), 24);
+
+    // Set boat back to stationary (anchored)
+    app.pathValues.set("navigation.state", "anchored");
+    app.subscriptionmanager.emitDelta({
+      updates: [
+        {
+          values: [{ path: "navigation.state", value: "anchored" }],
+          timestamp: new Date(t).toISOString(),
+        },
+      ],
+    });
+
+    // Now learning should work again
+    t += 24 * HOUR;
+    emitSample(app, t, { remaining: 128, level: 0.512, crew: ["a", "b"] });
+    internals.runCycle();
+
+    // Rate should have updated (still near 24, with EMA smoothing)
+    const rate = est.learner.getRate(2);
+    assert(rate > 23 && rate < 25, `rate should be ~24, got ${rate}`);
+
+    await plugin.stop();
+  });
+
   test("supports multiple tanks with custom paths", async () => {
     const app = new FakeSignalKApp();
     app.dataPath = await newDataDir();

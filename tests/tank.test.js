@@ -391,4 +391,99 @@ test.describe("TankEstimator persistence", () => {
     assert.strictEqual(est.anchor, null);
     assert.strictEqual(est.shortRate, null);
   });
+
+  test("skipLearning prevents learning but still computes observed rate", () => {
+    const est = makeEstimator({ minSamples: 0.1 });
+
+    est.processSample({
+      remaining: 200,
+      level: 0.8,
+      crewCount: 2,
+      timestamp: T0,
+    });
+    est.processSample({
+      remaining: 180,
+      level: 0.72,
+      crewCount: 2,
+      timestamp: T0 + 12 * HOUR,
+    });
+
+    // First sample learns normally (learned 40 l/day)
+    assert.strictEqual(est.learner.getRate(2), 40);
+
+    // Second sample with skipLearning=true should not learn
+    est.processSample({
+      remaining: 140,
+      level: 0.56,
+      crewCount: 2,
+      timestamp: T0 + 24 * HOUR,
+      skipLearning: true,
+    });
+
+    // Rate should still be 40 (unchanged from the first learning)
+    assert.strictEqual(est.learner.getRate(2), 40);
+
+    // Now learn normally again with higher consumption to verify learning still works
+    est.processSample({
+      remaining: 92,
+      level: 0.368,
+      crewCount: 2,
+      timestamp: T0 + 36 * HOUR,
+    });
+
+    // New learning (96 l/day over 12h) should have moved the estimate upward
+    // from 40 toward 96 with EMA smoothing
+    const rate = est.learner.getRate(2);
+    assert(rate > 40 && rate < 96, `rate should be between 40 and 96, got ${rate}`);
+  });
+
+  test("infers consumption during partial canister refill", () => {
+    const est = makeEstimator({ capacity: 120, minSamples: 0.1 });
+
+    // Start with 100L
+    est.processSample({
+      remaining: 100,
+      level: null,
+      crewCount: 2,
+      timestamp: T0,
+    });
+    // Next sample shows 107L (+7L delta): consumed 3L, added 10L canister
+    const res = est.processSample({
+      remaining: 107,
+      level: null,
+      crewCount: 2,
+      timestamp: T0 + 12 * HOUR,
+    });
+
+    // Should infer 3L consumption (10L canister - 7L observed increase)
+    assert.strictEqual(res.status, "learned");
+    assert.strictEqual(res.observedRate, 6); // 3L over 12h = 6 L/day
+    assert.ok(res.learned);
+
+    // Rate should incorporate the 6 L/day (which will move toward it with EMA)
+    const rate = est.learner.getRate(2);
+    assert(rate > 0 && rate < 10, `rate should be ~6, got ${rate}`);
+  });
+
+  test("skips learning for large refills that exceed typical canister", () => {
+    const est = makeEstimator({ capacity: 200, minSamples: 0.1 });
+
+    est.processSample({
+      remaining: 50,
+      level: null,
+      crewCount: 2,
+      timestamp: T0,
+    });
+    // Large refill (delta = +80L), can't infer consumption
+    const res = est.processSample({
+      remaining: 130,
+      level: null,
+      crewCount: 2,
+      timestamp: T0 + 12 * HOUR,
+    });
+
+    assert.strictEqual(res.status, "refill");
+    assert.strictEqual(res.observedRate, null);
+    assert.strictEqual(res.learned, false);
+  });
 });

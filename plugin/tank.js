@@ -27,8 +27,14 @@ const CAPACITY_LEVEL_MAX = 0.98;
 const CAPACITY_ALPHA = 0.1;
 
 /** A rise larger than both of these is treated as a refill. */
-const REFILL_MIN_LITERS = 1;
-const REFILL_CAPACITY_FRACTION = 0.05;
+const REFILL_MIN_LITERS = 0.5;
+const REFILL_CAPACITY_FRACTION = 0.03;
+
+/** Typical canister size for heuristic refill inference. */
+const TYPICAL_REFILL_LITERS = 10;
+
+/** Maximum inferred consumption during a refill (liters). */
+const MAX_INFERRED_CONSUMPTION = TYPICAL_REFILL_LITERS * 0.5;
 
 /** Consumption below this over an interval reads as zero (sensor noise). */
 const NOISE_LITERS = 0.05;
@@ -146,10 +152,11 @@ class TankEstimator {
    * @param {number|null} sample.level - Current level (ratio 0-1)
    * @param {number|null} sample.crewCount - Crew on board at sample time
    * @param {number} sample.timestamp - Sample time (epoch ms)
+   * @param {boolean} [sample.skipLearning=false] - Skip learning this sample
    * @returns {{status: "learned"|"refill"|"skipped"|"insufficient",
    *            observedRate: number|null, learned: boolean}}
    */
-  processSample({ remaining, level, crewCount, timestamp }) {
+  processSample({ remaining, level, crewCount, timestamp, skipLearning = false }) {
     if (Number.isFinite(timestamp)) {
       if (remaining != null && Number.isFinite(remaining)) {
         this.lastSeen.remaining = remaining;
@@ -237,21 +244,46 @@ class TankEstimator {
       REFILL_MIN_LITERS,
       cap != null ? REFILL_CAPACITY_FRACTION * cap : 0,
     );
-    if (delta > refillThreshold) {
-      // Tank was filled — the interval says nothing about consumption
-      return { status: "refill", observedRate: null, learned: false };
-    }
 
-    const consumed = Math.max(0, -delta);
+    let consumed = 0;
+    let isRefill = delta > refillThreshold;
+
+    if (isRefill) {
+      // Tank increased - likely a refill. But consumption may have
+      // occurred during the interval (e.g., drank 3L then added 10L canister).
+      // Infer minimum consumption by assuming refills are typically
+      // in TYPICAL_REFILL_LITERS increments. If delta is less than that,
+      // the difference is inferred consumption.
+      if (delta < TYPICAL_REFILL_LITERS && cap != null) {
+        const inferred = TYPICAL_REFILL_LITERS - delta;
+        // Cap the inferred amount to avoid over-estimation
+        consumed = Math.min(inferred, MAX_INFERRED_CONSUMPTION);
+        // Verify the inferred consumption is physically possible
+        // (anchor - consumed + refill <= capacity)
+        if (anchor.liters - consumed + delta <= cap) {
+          isRefill = false; // We'll learn from this
+        } else {
+          consumed = 0; // Skip learning if numbers don't make sense
+        }
+      }
+      if (isRefill) {
+        // Genuine refill (or can't infer consumption)
+        return { status: "refill", observedRate: null, learned: false };
+      }
+    } else {
+      consumed = Math.max(0, -delta);
+    }
     const observedRate =
       consumed < NOISE_LITERS ? 0 : (consumed / intervalHours) * 24;
 
-    const learned = this.learner.update({
-      crewCount,
-      intervalHours,
-      liters: consumed,
-      timestamp,
-    });
+    const learned =
+      !skipLearning &&
+      this.learner.update({
+        crewCount,
+        intervalHours,
+        liters: consumed,
+        timestamp,
+      });
 
     this.shortRate =
       this.shortRate == null
@@ -408,6 +440,8 @@ module.exports = {
   NOISE_LITERS,
   REFILL_MIN_LITERS,
   REFILL_CAPACITY_FRACTION,
+  TYPICAL_REFILL_LITERS,
+  MAX_INFERRED_CONSUMPTION,
   MIN_INTERVAL_HOURS,
   MAX_INTERVAL_HOURS,
 };

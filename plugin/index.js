@@ -27,6 +27,11 @@ const { loadTankState, saveTankState } = require("./store.js");
 const CREW_PATH = "communication.crewNames";
 
 /**
+ * Path providing the boat's navigation state.
+ */
+const NAV_STATE_PATH = "navigation.state";
+
+/**
  * Default tank configuration: a single fresh water tank on the standard
  * Signal K paths.
  */
@@ -58,6 +63,12 @@ const DEFAULT_CONFIG = {
   },
   tanks: [DEFAULT_TANK],
 };
+
+/**
+ * Navigation states that indicate the boat is under way and
+ * learning should be skipped (motion causes tank sensor fluctuation).
+ */
+const UNDER_WAY_STATES = ["sailing", "motoring", "under way"];
 
 /**
  * Delay before the first cycle after start, so subscribed providers have
@@ -574,6 +585,20 @@ module.exports = (app) => {
   }
 
   /**
+   * Checks if the boat is under way (sailing, motoring, or similar).
+   * Learning is skipped when under way because motion causes tank
+   * sensor fluctuations.
+   *
+   * @returns {boolean}
+   */
+  function isUnderWay() {
+    const cached = pathCache.get(NAV_STATE_PATH);
+    const raw = cached != null ? cached.raw : app.getSelfPath(NAV_STATE_PATH);
+    const state = typeof raw === "string" ? raw.trim().toLowerCase() : null;
+    return state != null && UNDER_WAY_STATES.includes(state);
+  }
+
+  /**
    * Handles a Signal K delta: caches values for paths we subscribe to.
    *
    * @param {object} delta
@@ -770,6 +795,7 @@ module.exports = (app) => {
     }
     try {
       const crewCount = resolveCrewCount();
+      const underWay = isUnderWay();
       for (const est of estimators) {
         const remaining = readNumber(est.remainingPath);
         const level = readNumber(est.levelPath);
@@ -780,6 +806,7 @@ module.exports = (app) => {
           level,
           crewCount,
           timestamp,
+          skipLearning: underWay,
         });
         app.debug(
           `Tank ${est.id}: sample ${result.status}` +
@@ -908,7 +935,7 @@ module.exports = (app) => {
    * @returns {void}
    */
   function subscribeToDeltas() {
-    const paths = new Set([CREW_PATH]);
+    const paths = new Set([CREW_PATH, NAV_STATE_PATH]);
     for (const est of estimators) {
       paths.add(est.levelPath);
       paths.add(est.remainingPath);
