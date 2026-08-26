@@ -105,11 +105,12 @@ test.describe("TankEstimator capacity", () => {
     assert.strictEqual(est.capacityEstimate, null);
   });
 
-  test("configured capacity wins over the inferred estimate", () => {
-    const est = makeEstimator({ capacity: 300 });
+  test("capacity from the tank's capacity path wins over the inferred estimate", () => {
+    const est = makeEstimator();
     est.processSample({
       remaining: 200,
       level: 0.8,
+      capacity: 300,
       crewCount: 2,
       timestamp: T0,
     });
@@ -187,17 +188,19 @@ test.describe("TankEstimator processSample", () => {
   });
 
   test("skips learning when the source switches mid-interval", () => {
-    const est = makeEstimator({ capacity: 250 });
+    const est = makeEstimator();
     est.processSample({
       remaining: 200,
       level: 0.8,
+      capacity: 250,
       crewCount: 2,
       timestamp: T0,
     });
-    // remaining goes away; level + configured capacity (250) takes over
+    // remaining goes away; level + capacity-path capacity (250) takes over
     const res = est.processSample({
       remaining: null,
       level: 0.7,
+      capacity: 250,
       crewCount: 2,
       timestamp: T0 + 24 * HOUR,
     });
@@ -207,6 +210,7 @@ test.describe("TankEstimator processSample", () => {
     const res2 = est.processSample({
       remaining: null,
       level: 0.6,
+      capacity: 250,
       crewCount: 2,
       timestamp: T0 + 48 * HOUR,
     });
@@ -271,16 +275,18 @@ test.describe("TankEstimator processSample", () => {
 
 test.describe("TankEstimator predict", () => {
   test("predicts from a learned rate", () => {
-    const est = makeEstimator({ capacity: 250, minSamples: 0.1 });
+    const est = makeEstimator({ minSamples: 0.1 });
     est.processSample({
       remaining: 200,
       level: 0.8,
+      capacity: 250,
       crewCount: 2,
       timestamp: T0,
     });
     est.processSample({
       remaining: 176,
       level: 0.704,
+      capacity: 250,
       crewCount: 2,
       timestamp: T0 + 24 * HOUR,
     });
@@ -311,16 +317,18 @@ test.describe("TankEstimator predict", () => {
   });
 
   test("floors remaining at zero and clamps level", () => {
-    const est = makeEstimator({ capacity: 100, minSamples: 0.1 });
+    const est = makeEstimator({ minSamples: 0.1 });
     est.processSample({
       remaining: 100,
       level: 0.9,
+      capacity: 100,
       crewCount: 2,
       timestamp: T0,
     });
     est.processSample({
       remaining: 20,
       level: 0.2,
+      capacity: 100,
       crewCount: 2,
       timestamp: T0 + 24 * HOUR,
     });
@@ -344,7 +352,15 @@ test.describe("TankEstimator predict", () => {
   });
 
   test("estimates liters from level when remaining is absent", () => {
-    const est = makeEstimator({ capacity: 200, minSamples: 0.1 });
+    const est = makeEstimator({ minSamples: 0.1 });
+    // Establish the capacity from the tank's capacity path
+    est.processSample({
+      remaining: null,
+      level: null,
+      capacity: 200,
+      crewCount: 2,
+      timestamp: T0,
+    });
     const pred = est.predict({ remaining: null, level: 0.5, crewCount: 2 });
     assert.strictEqual(pred.liters, 100);
     assert.strictEqual(pred.remaining24h, Math.max(0, 100 - 12));
@@ -434,16 +450,20 @@ test.describe("TankEstimator persistence", () => {
     // New learning (96 l/day over 12h) should have moved the estimate upward
     // from 40 toward 96 with EMA smoothing
     const rate = est.learner.getRate(2);
-    assert(rate > 40 && rate < 96, `rate should be between 40 and 96, got ${rate}`);
+    assert(
+      rate > 40 && rate < 96,
+      `rate should be between 40 and 96, got ${rate}`,
+    );
   });
 
   test("infers consumption during partial canister refill", () => {
-    const est = makeEstimator({ capacity: 120, minSamples: 0.1 });
+    const est = makeEstimator({ minSamples: 0.1 });
 
     // Start with 100L
     est.processSample({
       remaining: 100,
       level: null,
+      capacity: 120,
       crewCount: 2,
       timestamp: T0,
     });
@@ -451,6 +471,7 @@ test.describe("TankEstimator persistence", () => {
     const res = est.processSample({
       remaining: 107,
       level: null,
+      capacity: 120,
       crewCount: 2,
       timestamp: T0 + 12 * HOUR,
     });
@@ -466,11 +487,12 @@ test.describe("TankEstimator persistence", () => {
   });
 
   test("skips learning for large refills that exceed typical canister", () => {
-    const est = makeEstimator({ capacity: 200, minSamples: 0.1 });
+    const est = makeEstimator({ minSamples: 0.1 });
 
     est.processSample({
       remaining: 50,
       level: null,
+      capacity: 200,
       crewCount: 2,
       timestamp: T0,
     });
@@ -478,6 +500,7 @@ test.describe("TankEstimator persistence", () => {
     const res = est.processSample({
       remaining: 130,
       level: null,
+      capacity: 200,
       crewCount: 2,
       timestamp: T0 + 12 * HOUR,
     });

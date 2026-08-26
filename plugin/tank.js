@@ -68,9 +68,9 @@ class TankEstimator {
    * @param {string} opts.id - Tank identifier (persistence filename)
    * @param {string} opts.name - Human-readable tank name
    * @param {string} opts.levelPath - Signal K level path (ratio)
-   * @param {string} opts.remainingPath - Signal K remaining path (liters)
+   * @param {string} opts.remainingPath - Signal K remaining path (m3)
+   * @param {string} opts.capacityPath - Signal K capacity path (m3)
    * @param {string} opts.predictionBase - Base path for prediction deltas
-   * @param {number|null} [opts.capacity] - Configured capacity override (liters)
    * @param {number} [opts.defaultPerCrewLitersPerDay] - Fallback rate per crew member
    * @param {number} [opts.defaultCrewCount] - Crew count used when unknown
    * @param {number} [opts.emaAlpha] - Learner EMA alpha
@@ -82,13 +82,8 @@ class TankEstimator {
     this.name = opts.name;
     this.levelPath = opts.levelPath;
     this.remainingPath = opts.remainingPath;
+    this.capacityPath = opts.capacityPath;
     this.predictionBase = opts.predictionBase;
-    this.configuredCapacity =
-      typeof opts.capacity === "number" &&
-      Number.isFinite(opts.capacity) &&
-      opts.capacity > 0
-        ? opts.capacity
-        : null;
     this.defaultPerCrew =
       typeof opts.defaultPerCrewLitersPerDay === "number" &&
       opts.defaultPerCrewLitersPerDay >= 0
@@ -115,6 +110,14 @@ class TankEstimator {
     this.capacitySamples = 0;
 
     /**
+     * Latest capacity (liters) from the tank's `capacity` path, if the
+     * provider publishes one. Wins over the inferred estimate.
+     *
+     * @type {number|null}
+     */
+    this.pathCapacity = null;
+
+    /**
      * Last processed sample anchor.
      *
      * @type {{liters: number, time: number, source: "remaining"|"level"}|null}
@@ -135,12 +138,13 @@ class TankEstimator {
   }
 
   /**
-   * Capacity in liters: configured override wins, else the inferred estimate.
+   * Capacity in liters: the tank's `capacity` path value wins, else the
+   * inferred estimate.
    *
    * @returns {number|null}
    */
   get capacity() {
-    return this.configuredCapacity ?? this.capacityEstimate;
+    return this.pathCapacity ?? this.capacityEstimate;
   }
 
   /**
@@ -150,13 +154,26 @@ class TankEstimator {
    * @param {object} sample
    * @param {number|null} sample.remaining - Remaining liters (primary source)
    * @param {number|null} sample.level - Current level (ratio 0-1)
+   * @param {number|null} sample.capacity - Tank capacity in liters from the
+   *        tank's `capacity` path, when the provider publishes one
    * @param {number|null} sample.crewCount - Crew on board at sample time
    * @param {number} sample.timestamp - Sample time (epoch ms)
    * @param {boolean} [sample.skipLearning=false] - Skip learning this sample
    * @returns {{status: "learned"|"refill"|"skipped"|"insufficient",
    *            observedRate: number|null, learned: boolean}}
    */
-  processSample({ remaining, level, crewCount, timestamp, skipLearning = false }) {
+  processSample({
+    remaining,
+    level,
+    capacity,
+    crewCount,
+    timestamp,
+    skipLearning = false,
+  }) {
+    if (capacity != null && Number.isFinite(capacity) && capacity > 0) {
+      this.pathCapacity = capacity;
+    }
+
     if (Number.isFinite(timestamp)) {
       if (remaining != null && Number.isFinite(remaining)) {
         this.lastSeen.remaining = remaining;
@@ -173,8 +190,8 @@ class TankEstimator {
     // freshest value of each seen so far.
     // Capacity inference from any known remaining/level pair, even if
     // they arrived in separate deltas (different senders). Uses the
-    // freshest value of each seen so far. The estimate is tracked even
-    // when a capacity is configured, so it survives a later config change.
+    // freshest value of each seen so far. Only a fallback for tanks
+    // whose provider does not publish the `capacity` path.
     {
       const r =
         remaining != null && Number.isFinite(remaining)
@@ -368,6 +385,7 @@ class TankEstimator {
     return {
       version: 1,
       id: this.id,
+      pathCapacity: this.pathCapacity,
       capacityEstimate: this.capacityEstimate,
       capacitySamples: this.capacitySamples,
       lastSeen: this.lastSeen,
@@ -386,6 +404,13 @@ class TankEstimator {
   fromJSON(data) {
     if (data == null || typeof data !== "object") {
       return;
+    }
+    if (
+      typeof data.pathCapacity === "number" &&
+      Number.isFinite(data.pathCapacity) &&
+      data.pathCapacity > 0
+    ) {
+      this.pathCapacity = data.pathCapacity;
     }
     if (
       typeof data.capacityEstimate === "number" &&

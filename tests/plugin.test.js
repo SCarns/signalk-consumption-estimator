@@ -82,20 +82,25 @@ class FakeSignalKApp extends EventEmitter {
 }
 
 /**
- * Emits a tank + crew delta through the subscription manager.
+ * Emits a tank + crew delta through the subscription manager. Tank
+ * volumes are in m3 per the Signal K spec, as a real provider would
+ * send them.
  *
  * @param {FakeSignalKApp} app
  * @param {number} timestamp - Epoch ms for the delta
- * @param {{remaining?: number|null, level?: number|null, crew?: string[]|null}} values
+ * @param {{remaining?: number|null, level?: number|null, capacity?: number|null, crew?: string[]|null}} values
  * @returns {void}
  */
-function emitSample(app, timestamp, { remaining, level, crew }) {
+function emitSample(app, timestamp, { remaining, level, capacity, crew }) {
   const values = [];
   if (remaining !== undefined) {
     values.push({ path: "tanks.freshWater.water.remaining", value: remaining });
   }
   if (level !== undefined) {
     values.push({ path: "tanks.freshWater.water.currentLevel", value: level });
+  }
+  if (capacity !== undefined) {
+    values.push({ path: "tanks.freshWater.water.capacity", value: capacity });
   }
   if (crew !== undefined) {
     values.push({ path: "communication.crewNames", value: crew });
@@ -248,6 +253,7 @@ test.describe("Plugin lifecycle", () => {
     const paths = subscription.subscribe.map((s) => s.path);
     assert.ok(paths.includes("tanks.freshWater.water.currentLevel"));
     assert.ok(paths.includes("tanks.freshWater.water.remaining"));
+    assert.ok(paths.includes("tanks.freshWater.water.capacity"));
     assert.ok(paths.includes("communication.crewNames"));
 
     const meta = metaUpdates(app);
@@ -275,14 +281,20 @@ test.describe("Plugin lifecycle", () => {
     await plugin.start(TEST_CONFIG);
     const internals = plugin.__getInternals();
 
-    // Anchor sample: 200 l at 80% with 2 crew
-    emitSample(app, T0, { remaining: 200, level: 0.8, crew: ["a", "b"] });
+    // Anchor sample: 200 l (0.2 m3) at 80% with 2 crew, 250 l tank
+    emitSample(app, T0, {
+      remaining: 0.2,
+      level: 0.8,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
 
     // 24 h later: 24 l consumed → 24 l/day
     emitSample(app, T0 + 24 * HOUR, {
-      remaining: 176,
+      remaining: 0.176,
       level: 0.704,
+      capacity: 0.25,
       crew: ["a", "b"],
     });
     internals.runCycle();
@@ -290,7 +302,7 @@ test.describe("Plugin lifecycle", () => {
     const base = "tanks.freshWater.water.prediction";
     assert.strictEqual(lastValue(app, `${base}.consumption24h`), 24);
     assert.strictEqual(lastValue(app, `${base}.remaining24h`), 152);
-    // capacity inferred as 250 l
+    // capacity 250 l from the capacity path
     assert.strictEqual(lastValue(app, `${base}.level24h`), 0.608);
     assert.strictEqual(internals.resolveCrewCount(), 2);
     assert.strictEqual(internals.estimators[0].learner.getRate(2), 24);
@@ -299,6 +311,36 @@ test.describe("Plugin lifecycle", () => {
     assert.ok(status.includes("Fresh water"));
     assert.ok(status.includes("24 l/day"));
     assert.ok(status.includes("crew 2 @ 24 l/day"));
+
+    await plugin.stop();
+  });
+
+  test("reads tank volumes in m3 and capacity from the capacity path", async () => {
+    const app = new FakeSignalKApp();
+    app.dataPath = await newDataDir();
+    const plugin = makePlugin(app);
+    await plugin.start(TEST_CONFIG);
+    const internals = plugin.__getInternals();
+
+    // 50 l remaining at level 0.5 (inference would say 100 l), but the
+    // capacity path says 200 l and wins
+    emitSample(app, T0, {
+      remaining: 0.05,
+      level: 0.5,
+      capacity: 0.2,
+      crew: ["a"],
+    });
+    internals.runCycle();
+
+    const est = internals.estimators[0];
+    assert.strictEqual(est.capacityEstimate, 100);
+    assert.strictEqual(est.capacity, 200);
+
+    const base = "tanks.freshWater.water.prediction";
+    // 50 l remaining, default rate 6 l/day for 1 crew
+    assert.strictEqual(lastValue(app, `${base}.consumption24h`), 6);
+    assert.strictEqual(lastValue(app, `${base}.remaining24h`), 44);
+    assert.strictEqual(lastValue(app, `${base}.level24h`), 0.22);
 
     await plugin.stop();
   });
@@ -352,15 +394,25 @@ test.describe("Plugin lifecycle", () => {
     await plugin.start({
       ...TEST_CONFIG,
       learning: { emaAlpha: 0.05 },
-      tanks: [{ ...TEST_CONFIG.tanks[0], capacity: 250 }],
+      tanks: [TEST_CONFIG.tanks[0]],
     });
     const internals = plugin.__getInternals();
 
     let t = T0;
-    emitSample(app, t, { remaining: 200, level: 0.8, crew: ["a", "b"] });
+    emitSample(app, t, {
+      remaining: 0.2,
+      level: 0.8,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
     t += 24 * HOUR;
-    emitSample(app, t, { remaining: 176, level: 0.704, crew: ["a", "b"] });
+    emitSample(app, t, {
+      remaining: 0.176,
+      level: 0.704,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
 
     // One learning sample so far: bin exists but below minSamples (3),
@@ -379,11 +431,16 @@ test.describe("Plugin lifecycle", () => {
     const plugin = makePlugin(app);
     await plugin.start({
       ...TEST_CONFIG,
-      tanks: [{ ...TEST_CONFIG.tanks[0], capacity: 250 }],
+      tanks: [TEST_CONFIG.tanks[0]],
     });
     const internals = plugin.__getInternals();
 
-    emitSample(app, T0, { remaining: 0, level: 0, crew: ["a", "b"] });
+    emitSample(app, T0, {
+      remaining: 0,
+      level: 0,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
 
     const status = app.setPluginStatusCalls.at(-1);
@@ -398,34 +455,29 @@ test.describe("Plugin lifecycle", () => {
     const app = new FakeSignalKApp();
     app.dataPath = await newDataDir();
     const plugin = makePlugin(app);
-    // Big tank (configured capacity) so high consumption can run for days
+    // Big tank (1000 l) so high consumption can run for days
     await plugin.start({
       ...TEST_CONFIG,
-      tanks: [
-        {
-          ...TEST_CONFIG.tanks[0],
-          capacity: 1000,
-        },
-      ],
+      tanks: [TEST_CONFIG.tanks[0]],
     });
     const internals = plugin.__getInternals();
 
     const notePath =
       "notifications.tanks.freshWater.water.prediction.consumption";
 
-    // Anchor + learn a calm baseline of 24 l/day
+    // Anchor + learn a calm baseline of 24 l/day (volumes in m3)
     let t = T0;
-    emitSample(app, t, { remaining: 1000, crew: ["a", "b"] });
+    emitSample(app, t, { remaining: 1, capacity: 1, crew: ["a", "b"] });
     internals.runCycle();
     t += 24 * HOUR;
-    emitSample(app, t, { remaining: 976, crew: ["a", "b"] });
+    emitSample(app, t, { remaining: 0.976, capacity: 1, crew: ["a", "b"] });
     internals.runCycle();
     assert.strictEqual(internals.estimators[0].shortRate, 24);
 
     // Sustained high consumption: 96 l/day (1000 → 976 → 880 → 784 → 688 → 592)
-    for (const remaining of [880, 784, 688, 592]) {
+    for (const remaining of [0.88, 0.784, 0.688, 0.592]) {
       t += 24 * HOUR;
-      emitSample(app, t, { remaining, crew: ["a", "b"] });
+      emitSample(app, t, { remaining, capacity: 1, crew: ["a", "b"] });
       internals.runCycle();
     }
     const raised = lastValue(app, notePath);
@@ -439,7 +491,11 @@ test.describe("Plugin lifecycle", () => {
     for (let day = 0; day < 8; day++) {
       remaining -= 24;
       t += 24 * HOUR;
-      emitSample(app, t, { remaining, crew: ["a", "b"] });
+      emitSample(app, t, {
+        remaining: remaining / 1000,
+        capacity: 1,
+        crew: ["a", "b"],
+      });
       internals.runCycle();
     }
     const cleared = lastValue(app, notePath);
@@ -456,21 +512,21 @@ test.describe("Plugin lifecycle", () => {
     await plugin.start({
       ...TEST_CONFIG,
       notification: { enabled: false, factor: 2, minCycles: 1 },
-      tanks: [{ ...TEST_CONFIG.tanks[0], capacity: 1000 }],
+      tanks: [TEST_CONFIG.tanks[0]],
     });
     const internals = plugin.__getInternals();
 
     let t = T0;
-    emitSample(app, t, { remaining: 1000, crew: ["a", "b"] });
+    emitSample(app, t, { remaining: 1, capacity: 1, crew: ["a", "b"] });
     internals.runCycle();
     t += 24 * HOUR;
-    emitSample(app, t, { remaining: 976, crew: ["a", "b"] });
+    emitSample(app, t, { remaining: 0.976, capacity: 1, crew: ["a", "b"] });
     internals.runCycle();
     t += 24 * HOUR;
-    emitSample(app, t, { remaining: 880, crew: ["a", "b"] });
+    emitSample(app, t, { remaining: 0.88, capacity: 1, crew: ["a", "b"] });
     internals.runCycle();
     t += 24 * HOUR;
-    emitSample(app, t, { remaining: 784, crew: ["a", "b"] });
+    emitSample(app, t, { remaining: 0.784, capacity: 1, crew: ["a", "b"] });
     internals.runCycle();
 
     const notePath =
@@ -487,11 +543,17 @@ test.describe("Plugin lifecycle", () => {
     await plugin.start(TEST_CONFIG);
     const internals = plugin.__getInternals();
 
-    emitSample(app, T0, { remaining: 200, level: 0.8, crew: ["a", "b"] });
+    emitSample(app, T0, {
+      remaining: 0.2,
+      level: 0.8,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
     emitSample(app, T0 + 24 * HOUR, {
-      remaining: 176,
+      remaining: 0.176,
       level: 0.704,
+      capacity: 0.25,
       crew: ["a", "b"],
     });
     internals.runCycle();
@@ -504,6 +566,7 @@ test.describe("Plugin lifecycle", () => {
     );
     const saved = JSON.parse(raw);
     assert.strictEqual(saved.learner.bins["2"].rate, 24);
+    assert.strictEqual(saved.pathCapacity, 250);
     assert.ok(saved.capacityEstimate > 0);
 
     // A fresh plugin instance restores the learned state
@@ -513,6 +576,7 @@ test.describe("Plugin lifecycle", () => {
     await plugin2.start(TEST_CONFIG);
     const est = plugin2.__getInternals().estimators[0];
     assert.strictEqual(est.learner.getRate(2), 24);
+    assert.strictEqual(est.capacity, 250);
     assert.ok(est.capacityEstimate > 0);
     await plugin2.stop();
   });
@@ -552,10 +616,20 @@ test.describe("Plugin lifecycle", () => {
 
     // First learning cycle (stationary)
     let t = T0;
-    emitSample(app, t, { remaining: 200, level: 0.8, crew: ["a", "b"] });
+    emitSample(app, t, {
+      remaining: 0.2,
+      level: 0.8,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
     t += 24 * HOUR;
-    emitSample(app, t, { remaining: 176, level: 0.704, crew: ["a", "b"] });
+    emitSample(app, t, {
+      remaining: 0.176,
+      level: 0.704,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
 
     const est = internals.estimators[0];
@@ -575,7 +649,12 @@ test.describe("Plugin lifecycle", () => {
 
     // Emit a sample while sailing - should not learn
     t += 24 * HOUR;
-    emitSample(app, t, { remaining: 152, level: 0.608, crew: ["a", "b"] });
+    emitSample(app, t, {
+      remaining: 0.152,
+      level: 0.608,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
 
     // Rate should still be 24 (unchanged because learning was skipped)
@@ -594,7 +673,12 @@ test.describe("Plugin lifecycle", () => {
 
     // Now learning should work again
     t += 24 * HOUR;
-    emitSample(app, t, { remaining: 128, level: 0.512, crew: ["a", "b"] });
+    emitSample(app, t, {
+      remaining: 0.128,
+      level: 0.512,
+      capacity: 0.25,
+      crew: ["a", "b"],
+    });
     internals.runCycle();
 
     // Rate should have updated (still near 24, with EMA smoothing)
@@ -628,6 +712,7 @@ test.describe("Plugin lifecycle", () => {
       );
     assert.ok(paths.includes("tanks.fuel.0.remaining"));
     assert.ok(paths.includes("tanks.fuel.0.currentLevel"));
+    assert.ok(paths.includes("tanks.fuel.0.capacity"));
 
     const meta = metaUpdates(app);
     assert.ok(

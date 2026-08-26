@@ -32,6 +32,18 @@ const CREW_PATH = "communication.crewNames";
 const NAV_STATE_PATH = "navigation.state";
 
 /**
+ * Signal K tank volumes (`remaining`, `capacity`) are in m3; the
+ * estimator works in liters.
+ */
+const M3_TO_LITERS = 1000;
+
+/**
+ * Liters of precision to keep when converting m3 tank volumes (milliliter
+ * resolution, well beyond tank sensor accuracy, avoids float drift).
+ */
+const VOLUME_DECIMALS = 3;
+
+/**
  * Default tank configuration: a single fresh water tank on the standard
  * Signal K paths.
  */
@@ -41,7 +53,6 @@ const DEFAULT_TANK = {
   levelPath: "tanks.freshWater.water.currentLevel",
   remainingPath: "tanks.freshWater.water.remaining",
   predictionBase: "tanks.freshWater.water.prediction",
-  capacity: null,
   defaultPerCrewLitersPerDay: 6,
   defaultCrewCount: 2,
 };
@@ -166,6 +177,21 @@ function predictionBaseFromLevelPath(levelPath) {
     return `${levelPath}.prediction`;
   }
   return `${levelPath.slice(0, idx)}.prediction`;
+}
+
+/**
+ * Derives the capacity path from a level path:
+ * `tanks.freshWater.water.currentLevel` → `tanks.freshWater.water.capacity`.
+ *
+ * @param {string} levelPath
+ * @returns {string}
+ */
+function capacityPathFromLevelPath(levelPath) {
+  const idx = levelPath.lastIndexOf(".");
+  if (idx <= 0) {
+    return `${levelPath}.capacity`;
+  }
+  return `${levelPath.slice(0, idx)}.capacity`;
 }
 
 /**
@@ -381,13 +407,6 @@ function buildPluginSchema() {
               description:
                 "Base path for prediction deltas (defaults to the level path's parent + .prediction)",
             },
-            capacity: {
-              type: "number",
-              title: "Tank Capacity",
-              description:
-                "Capacity in liters. Leave unset to infer it from level/remaining pairs",
-              minimum: 1,
-            },
             defaultPerCrewLitersPerDay: {
               type: "number",
               title: "Default Consumption Per Crew",
@@ -548,6 +567,22 @@ module.exports = (app) => {
       return toNumber(cached.raw);
     }
     return toNumber(app.getSelfPath(path));
+  }
+
+  /**
+   * Reads a cached (or server-side) tank volume path (m3 per the Signal K
+   * spec) and converts it to liters.
+   *
+   * @param {string} path
+   * @returns {number|null} Liters
+   */
+  function readTankVolume(path) {
+    const m3 = readNumber(path);
+    if (m3 == null) {
+      return null;
+    }
+    const factor = 10 ** VOLUME_DECIMALS;
+    return Math.round(m3 * M3_TO_LITERS * factor) / factor;
   }
 
   /**
@@ -797,13 +832,16 @@ module.exports = (app) => {
       const crewCount = resolveCrewCount();
       const underWay = isUnderWay();
       for (const est of estimators) {
-        const remaining = readNumber(est.remainingPath);
+        // Tank volumes arrive in m3 per the Signal K spec; convert to liters
+        const remaining = readTankVolume(est.remainingPath);
+        const capacity = readTankVolume(est.capacityPath);
         const level = readNumber(est.levelPath);
         const timestamp = sampleTimestamp(est);
 
         const result = est.processSample({
           remaining,
           level,
+          capacity,
           crewCount,
           timestamp,
           skipLearning: underWay,
@@ -814,7 +852,9 @@ module.exports = (app) => {
               ? ` (${Math.round(result.observedRate)} l/day observed)`
               : "") +
             ` — remaining=${remaining ?? "null"}, level=${level ?? "null"}, ` +
-            `capacity=${est.capacity ?? "null"} (estimate ${
+            `capacity=${est.capacity ?? "null"} (path ${
+              capacity ?? "null"
+            }, estimate ${
               est.capacityEstimate == null
                 ? "null"
                 : Math.round(est.capacityEstimate)
@@ -905,12 +945,12 @@ module.exports = (app) => {
           name,
           levelPath: tank.levelPath,
           remainingPath: tank.remainingPath,
+          capacityPath: capacityPathFromLevelPath(tank.levelPath),
           predictionBase:
             typeof tank.predictionBase === "string" &&
             tank.predictionBase !== ""
               ? tank.predictionBase
               : predictionBaseFromLevelPath(tank.levelPath),
-          capacity: tank.capacity ?? null,
           defaultPerCrewLitersPerDay:
             typeof tank.defaultPerCrewLitersPerDay === "number" &&
             tank.defaultPerCrewLitersPerDay >= 0
@@ -939,6 +979,7 @@ module.exports = (app) => {
     for (const est of estimators) {
       paths.add(est.levelPath);
       paths.add(est.remainingPath);
+      paths.add(est.capacityPath);
     }
     subscribedPaths = paths;
 
