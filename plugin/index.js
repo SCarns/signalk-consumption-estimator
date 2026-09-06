@@ -4,8 +4,8 @@
  * Learns tank consumption (liters/day) binned by crew count from Signal K
  * tank paths, and publishes 24-hour predictions as deltas:
  *
- * - `<tank>.prediction.consumption24h` - estimated consumption (l/day)
- * - `<tank>.prediction.remaining24h`   - predicted remaining liters
+ * - `<tank>.prediction.consumption24h` - estimated consumption rate (m3/s)
+ * - `<tank>.prediction.remaining24h`   - predicted remaining volume (m3)
  * - `<tank>.prediction.level24h`       - predicted level (ratio 0-1)
  *
  * Optionally raises a notification when observed consumption runs well
@@ -36,6 +36,7 @@ const NAV_STATE_PATH = "navigation.state";
  * estimator works in liters.
  */
 const M3_TO_LITERS = 1000;
+const SECONDS_PER_DAY = 86400;
 
 /**
  * Liters of precision to keep when converting m3 tank volumes (milliliter
@@ -398,7 +399,7 @@ function buildPluginSchema() {
             remainingPath: {
               type: "string",
               title: "Remaining Path",
-              description: "Signal K path for remaining volume (liters)",
+              description: "Signal K path for remaining volume (m3)",
               default: DEFAULT_TANK.remainingPath,
             },
             predictionBase: {
@@ -524,8 +525,8 @@ module.exports = (app) => {
           path: `${est.predictionBase}.consumption24h`,
           value: {
             displayName: `${est.name} consumption`,
-            description: `Estimated ${est.name.toLowerCase()} consumption rate in liters per day, learned per crew count`,
-            units: "l/day",
+            description: `Estimated ${est.name.toLowerCase()} consumption rate in cubic meters per second, learned per crew count`,
+            units: "m3/s",
           },
         },
         {
@@ -533,7 +534,7 @@ module.exports = (app) => {
           value: {
             displayName: `${est.name} remaining in 24 h`,
             description: `Predicted ${est.name.toLowerCase()} remaining volume in 24 hours`,
-            units: "l",
+            units: "m3",
           },
         },
         {
@@ -867,20 +868,25 @@ module.exports = (app) => {
           crewLabel: crewCount == null ? null : String(crewCount),
         });
 
+        // Preserve liters-based rounding before converting published values to SI.
         if (pred.liters == null) {
           // Tank volume can't be resolved (no remaining, or no capacity to
           // convert level). The consumption rate is still useful on its own,
           // so publish it; clear the volume-dependent predictions.
           publishDelta({
-            [`${est.predictionBase}.consumption24h`]: round(pred.rate, 2),
+            [`${est.predictionBase}.consumption24h`]:
+              round(pred.rate, 2) / (M3_TO_LITERS * SECONDS_PER_DAY),
             [`${est.predictionBase}.remaining24h`]: null,
             [`${est.predictionBase}.level24h`]: null,
           });
         } else {
           publishDelta({
-            [`${est.predictionBase}.consumption24h`]: round(pred.rate, 2),
+            [`${est.predictionBase}.consumption24h`]:
+              round(pred.rate, 2) / (M3_TO_LITERS * SECONDS_PER_DAY),
             [`${est.predictionBase}.remaining24h`]:
-              pred.remaining24h == null ? null : round(pred.remaining24h, 1),
+              pred.remaining24h == null
+                ? null
+                : round(pred.remaining24h, 1) / M3_TO_LITERS,
             [`${est.predictionBase}.level24h`]:
               pred.level24h == null ? null : round(pred.level24h, 3),
           });
