@@ -699,10 +699,15 @@ module.exports = (app) => {
       return;
     }
 
-    const learned = est.learnedRate(crewCount);
-    const short = est.shortRate;
+    // Both anomaly rates stay in liters/day; SI conversion is publication-only.
+    const learnedLitersPerDay = est.learnedRate(crewCount);
+    const observedLitersPerDay = est.shortRate;
 
-    if (learned == null || learned <= 0 || short == null) {
+    if (
+      learnedLitersPerDay == null ||
+      learnedLitersPerDay <= 0 ||
+      observedLitersPerDay == null
+    ) {
       state.cycles = 0;
       if (state.active) {
         state.active = false;
@@ -712,7 +717,7 @@ module.exports = (app) => {
     }
 
     const factor = cfg.factor ?? DEFAULT_CONFIG.notification.factor;
-    const ratio = short / learned;
+    const ratio = observedLitersPerDay / learnedLitersPerDay;
 
     if (state.active) {
       // Hysteresis: clear once clearly back below the threshold
@@ -737,7 +742,7 @@ module.exports = (app) => {
       publishNotification(
         est,
         true,
-        `${est.name} consumption ${ratio.toFixed(1)}x predicted (${Math.round(short)} l/day vs ${Math.round(learned)} l/day)`,
+        `${est.name} consumption ${ratio.toFixed(1)}x predicted (${Math.round(observedLitersPerDay)} l/day vs ${Math.round(learnedLitersPerDay)} l/day)`,
       );
     }
   }

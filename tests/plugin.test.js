@@ -546,6 +546,66 @@ test.describe("Plugin lifecycle", () => {
     await plugin.stop();
   });
 
+  for (const volumeAvailable of [true, false]) {
+    test(`anomaly rates stay in liters/day with volume ${volumeAvailable ? "available" : "unavailable"}`, async (t) => {
+      const app = new FakeSignalKApp();
+      app.dataPath = await newDataDir();
+      const plugin = makePlugin(app);
+      await plugin.start({
+        ...TEST_CONFIG,
+        tanks: [TEST_CONFIG.tanks[0]],
+      });
+      t.after(() => plugin.stop());
+      const internals = plugin.__getInternals();
+      const est = internals.estimators[0];
+      const base = "tanks.freshWater.water.prediction";
+      const notePath = `notifications.${base}.consumption`;
+      // Seed a learned 15 l/day baseline. Reusing the timestamp below
+      // prevents new learning while exercising publication and notifications.
+      est.learner.update({ crewCount: 2, intervalHours: 24, liters: 15 });
+      emitSample(app, T0, {
+        ...(volumeAvailable ? { remaining: 1, capacity: 1 } : {}),
+        crew: ["a", "b"],
+      });
+      est.shortRate = 15;
+      internals.runCycle();
+      assert.strictEqual(lastValue(app, notePath), undefined);
+      assert.strictEqual(
+        lastValue(app, `${base}.consumption24h`),
+        15 / 86400000,
+      );
+      assert.strictEqual(
+        lastValue(app, `${base}.remaining24h`),
+        volumeAvailable ? 0.985 : null,
+      );
+
+      // Exactly 2x must persist for two cycles before raising.
+      est.shortRate = 30;
+      internals.runCycle();
+      assert.strictEqual(lastValue(app, notePath), undefined);
+      internals.runCycle();
+      assert.strictEqual(lastValue(app, notePath).state, "warn");
+      assert.strictEqual(
+        lastValue(app, notePath).message,
+        `${est.name} consumption 2.0x predicted (30 l/day vs 15 l/day)`,
+      );
+
+      // Hysteresis retains the warning at factor / 1.5, then clears below it.
+      est.shortRate = 20;
+      internals.runCycle();
+      assert.strictEqual(lastValue(app, notePath).state, "warn");
+      est.shortRate = 19;
+      internals.runCycle();
+      assert.strictEqual(lastValue(app, notePath).state, "normal");
+      assert.strictEqual(est.learnedRate(2), 15);
+      assert.strictEqual(
+        lastValue(app, `${base}.consumption24h`),
+        15 / 86400000,
+      );
+      assert.deepStrictEqual(app.errors, []);
+    });
+  }
+
   test("notification disabled in config raises nothing", async () => {
     const app = new FakeSignalKApp();
     app.dataPath = await newDataDir();
